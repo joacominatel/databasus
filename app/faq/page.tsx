@@ -79,6 +79,14 @@ export default function FAQPage() {
                   text: "AI is used as a helper for verification of code quality and searching for vulnerabilities, cleaning up and improving documentation, assistance during development, and double-checking PRs after human review. AI is NOT used for writing entire code, vibe code approach, code without line-by-line verification, or code without tests. The project has solid test coverage, CI/CD pipeline automation, and verification by experienced developers. AI is just an assistant - the work is done by developers.",
                 },
               },
+              {
+                "@type": "Question",
+                name: "How to backup Databasus itself?",
+                acceptedAnswer: {
+                  "@type": "Answer",
+                  text: "To backup Databasus, go to /opt/databasus (or the folder where you installed it), then navigate to the databasus-data directory. You need to backup the secret.key file (encryption key for credentials) and the /pgdata folder (internal database containing configurations and backup metadata). If you use local backups, you can also backup the backups folder. Note that secret.key alone is not sufficient to restore encrypted backups — you also need /pgdata which contains the encryption metadata. To restore, recreate this folder structure on another server.",
+                },
+              },
             ],
           }),
         }}
@@ -282,6 +290,56 @@ export default function FAQPage() {
                   vulnerability reporting
                 </a>
                 .
+              </p>
+
+              <h2 id="backup-databasus">How to backup Databasus itself?</h2>
+
+              <p>
+                If you want to backup your Databasus instance (including all
+                configurations, databases and credentials), follow these steps:
+              </p>
+
+              <ol>
+                <li>
+                  Go to <code>/opt/databasus</code> (or the folder where you
+                  installed Databasus)
+                </li>
+                <li>
+                  Navigate to the <code>databasus-data</code> directory
+                </li>
+              </ol>
+
+              <p>
+                <strong>You need to backup:</strong>
+              </p>
+
+              <ul>
+                <li>
+                  <code>secret.key</code> — encryption key for your credentials
+                </li>
+                <li>
+                  <code>/pgdata</code> — internal PostgreSQL database of
+                  Databasus that contains all your configurations and backup
+                  metadata
+                </li>
+              </ul>
+
+              <p>
+                If you use local storage for backups, you can also backup the{" "}
+                <code>backups</code> folder.
+              </p>
+
+              <p>
+                <strong>Note:</strong> The <code>secret.key</code> file alone is
+                not sufficient to restore encrypted backups. You also need the{" "}
+                <code>/pgdata</code> folder, which contains the encryption
+                metadata required for decryption.
+              </p>
+
+              <p>
+                <strong>To restore Databasus on another server:</strong> simply
+                recreate the <code>databasus-data</code> folder structure with
+                the backed up files and start Databasus.
               </p>
             </article>
           </div>
