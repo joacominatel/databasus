@@ -1,11 +1,14 @@
 package system_healthcheck
 
 import (
+	"context"
 	"databasus-backend/internal/config"
 	"databasus-backend/internal/features/backups/backups/backuping"
 	"databasus-backend/internal/features/disk"
 	"databasus-backend/internal/storage"
+	cache_utils "databasus-backend/internal/util/cache"
 	"errors"
+	"time"
 )
 
 type HealthcheckService struct {
@@ -15,6 +18,20 @@ type HealthcheckService struct {
 }
 
 func (s *HealthcheckService) IsHealthy() error {
+	return s.performHealthCheck()
+}
+
+func (s *HealthcheckService) performHealthCheck() error {
+	// Check if cache is available with PING
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	client := cache_utils.GetValkeyClient()
+	pingResult := client.Do(ctx, client.B().Ping().Build())
+	if pingResult.Error() != nil {
+		return errors.New("cannot connect to valkey")
+	}
+
 	diskUsage, err := s.diskService.GetDiskUsage()
 	if err != nil {
 		return errors.New("cannot get disk usage")
@@ -40,6 +57,7 @@ func (s *HealthcheckService) IsHealthy() error {
 	if config.GetEnv().IsProcessingNode {
 		if !s.backuperNode.IsBackuperRunning() {
 			return errors.New("backuper node is not running for more than 5 minutes")
+
 		}
 	}
 

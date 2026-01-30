@@ -59,7 +59,7 @@ export const PlaygroundWarningComponent = (): JSX.Element => {
 
   return (
     <Modal
-      title="Welcome to Databasus Playground"
+      title="Welcome to Databasus playground"
       open={isVisible}
       onOk={handleClose}
       okText={
