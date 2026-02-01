@@ -39,4 +39,7 @@ var (
 	ErrSystemStorageCannotBeMadePrivate = errors.New(
 		"system storage cannot be changed to non-system",
 	)
+	ErrLocalStorageNotAllowedInCloudMode = errors.New(
+		"local storage can only be managed by administrators in cloud mode",
+	)
 )

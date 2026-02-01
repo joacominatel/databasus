@@ -317,6 +317,22 @@ export function EditStorageComponent({
 
   if (!storage) return <div />;
 
+  const storageTypeOptions = [
+    { label: 'Local storage', value: StorageType.LOCAL },
+    { label: 'S3', value: StorageType.S3 },
+    { label: 'Google Drive', value: StorageType.GOOGLE_DRIVE },
+    { label: 'NAS', value: StorageType.NAS },
+    { label: 'Azure Blob Storage', value: StorageType.AZURE_BLOB },
+    { label: 'FTP', value: StorageType.FTP },
+    { label: 'SFTP', value: StorageType.SFTP },
+    { label: 'Rclone', value: StorageType.RCLONE },
+  ].filter((option) => {
+    if (IS_CLOUD && option.value === StorageType.LOCAL && user.role !== UserRole.ADMIN) {
+      return false;
+    }
+    return true;
+  });
+
   return (
     <div>
       {isShowName && (
@@ -342,16 +358,7 @@ export function EditStorageComponent({
         <div className="flex items-center">
           <Select
             value={storage?.type}
-            options={[
-              { label: 'Local storage', value: StorageType.LOCAL },
-              { label: 'S3', value: StorageType.S3 },
-              { label: 'Google Drive', value: StorageType.GOOGLE_DRIVE },
-              { label: 'NAS', value: StorageType.NAS },
-              { label: 'Azure Blob Storage', value: StorageType.AZURE_BLOB },
-              { label: 'FTP', value: StorageType.FTP },
-              { label: 'SFTP', value: StorageType.SFTP },
-              { label: 'Rclone', value: StorageType.RCLONE },
-            ]}
+            options={storageTypeOptions}
             onChange={(value) => {
               setStorageType(value);
               setIsUnsaved(true);

@@ -3,6 +3,7 @@ package storages
 import (
 	"fmt"
 
+	"databasus-backend/internal/config"
 	audit_logs "databasus-backend/internal/features/audit_logs"
 	users_enums "databasus-backend/internal/features/users/enums"
 	users_models "databasus-backend/internal/features/users/models"
@@ -35,6 +36,11 @@ func (s *StorageService) SaveStorage(
 	}
 	if !canManage {
 		return ErrInsufficientPermissionsToManageStorage
+	}
+
+	if config.GetEnv().IsCloud && storage.Type == StorageTypeLocal &&
+		user.Role != users_enums.UserRoleAdmin {
+		return ErrLocalStorageNotAllowedInCloudMode
 	}
 
 	isUpdate := storage.ID != uuid.Nil
@@ -238,8 +244,14 @@ func (s *StorageService) TestStorageConnection(
 }
 
 func (s *StorageService) TestStorageConnectionDirect(
+	user *users_models.User,
 	storage *Storage,
 ) error {
+	if config.GetEnv().IsCloud && storage.Type == StorageTypeLocal &&
+		user.Role != users_enums.UserRoleAdmin {
+		return ErrLocalStorageNotAllowedInCloudMode
+	}
+
 	var usingStorage *Storage
 
 	if storage.ID != uuid.Nil {
