@@ -18,6 +18,8 @@ interface Props {
 export function ShowStorageComponent({ storage, user }: Props) {
   if (!storage) return null;
 
+  if (storage?.isSystem && user.role !== UserRole.ADMIN) return <div />;
+
   return (
     <div>
       <div className="mb-1 flex items-center">
@@ -39,33 +41,23 @@ export function ShowStorageComponent({ storage, user }: Props) {
         </div>
       )}
 
-      <div>{storage?.type === StorageType.S3 && <ShowS3StorageComponent storage={storage} />}</div>
-
       <div>
+        {storage?.type === StorageType.S3 && <ShowS3StorageComponent storage={storage} />}
+
         {storage?.type === StorageType.GOOGLE_DRIVE && (
           <ShowGoogleDriveStorageComponent storage={storage} />
         )}
-      </div>
 
-      <div>
         {storage?.type === StorageType.NAS && <ShowNASStorageComponent storage={storage} />}
-      </div>
 
-      <div>
         {storage?.type === StorageType.AZURE_BLOB && (
           <ShowAzureBlobStorageComponent storage={storage} />
         )}
-      </div>
 
-      <div>
         {storage?.type === StorageType.FTP && <ShowFTPStorageComponent storage={storage} />}
-      </div>
 
-      <div>
         {storage?.type === StorageType.SFTP && <ShowSFTPStorageComponent storage={storage} />}
-      </div>
 
-      <div>
         {storage?.type === StorageType.RCLONE && <ShowRcloneStorageComponent storage={storage} />}
       </div>
     </div>

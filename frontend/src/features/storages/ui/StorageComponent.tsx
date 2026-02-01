@@ -143,15 +143,22 @@ export const StorageComponent = ({
         ) : (
           <div>
             {!isEditName ? (
-              <div className="mb-5 flex items-center text-2xl font-bold">
-                {storage.name}
-                {(storage.isSystem && user.role === UserRole.ADMIN) ||
-                  (isCanManageStorages && (
+              <>
+                <div className="mb-5 flex items-center text-2xl font-bold">
+                  {storage.name}
+                  {(!storage.isSystem || user.role === UserRole.ADMIN) && isCanManageStorages && (
                     <div className="ml-2 cursor-pointer" onClick={() => startEdit('name')}>
                       <img src="/icons/pen-gray.svg" />
                     </div>
-                  ))}
-              </div>
+                  )}
+                </div>
+
+                {storage.isSystem && (
+                  <span className="mt-2 inline-block rounded-xl bg-[#00000010] px-2 py-1 text-xs text-gray-700 dark:bg-[#ffffff10] dark:text-gray-300">
+                    System storage
+                  </span>
+                )}
+              </>
             ) : (
               <div>
                 <div className="flex items-center">
@@ -220,19 +227,23 @@ export const StorageComponent = ({
               </div>
             )}
 
-            <div className="mt-5 flex items-center font-bold">
-              <div>Storage settings</div>
+            {!storage.isSystem ||
+              (user.role === UserRole.ADMIN && (
+                <div className="mt-5 flex items-center font-bold">
+                  <div>Storage settings</div>
 
-              {!isEditSettings &&
-              isCanManageStorages &&
-              !(storage.isSystem && user.role !== UserRole.ADMIN) ? (
-                <div className="ml-2 h-4 w-4 cursor-pointer" onClick={() => startEdit('settings')}>
-                  <img src="/icons/pen-gray.svg" />
+                  {!isEditSettings && isCanManageStorages ? (
+                    <div
+                      className="ml-2 h-4 w-4 cursor-pointer"
+                      onClick={() => startEdit('settings')}
+                    >
+                      <img src="/icons/pen-gray.svg" />
+                    </div>
+                  ) : (
+                    <div />
+                  )}
                 </div>
-              ) : (
-                <div />
-              )}
-            </div>
+              ))}
 
             <div className="mt-1 text-sm">
               {isEditSettings && isCanManageStorages ? (
@@ -254,7 +265,7 @@ export const StorageComponent = ({
               )}
             </div>
 
-            {!isEditSettings && (
+            {!isEditSettings && (!storage.isSystem || user.role === UserRole.ADMIN) && (
               <div className="mt-5">
                 <Button
                   type="primary"

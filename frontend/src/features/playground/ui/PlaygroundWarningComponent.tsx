@@ -59,7 +59,7 @@ export const PlaygroundWarningComponent = (): JSX.Element => {
 
   return (
     <Modal
-      title="Welcome to Databasus Playground"
+      title="Welcome to Databasus playground"
       open={isVisible}
       onOk={handleClose}
       okText={
@@ -78,9 +78,10 @@ export const PlaygroundWarningComponent = (): JSX.Element => {
         <div>
           <h3 className="mb-2 text-lg font-semibold">What is Playground?</h3>
           <p className="text-gray-700 dark:text-gray-300">
-            Playground is a dev environment where you can test small databases backup and see
-            Databasus in action. Databasus dev team can test new features and see issues which hard
-            to detect when using self hosted (without logs or reports)
+            Playground is a dev environment of Databasus development team. It is used by Databasus
+            dev team to test new features and see issues which hard to detect when using self hosted
+            (without logs or reports).{' '}
+            <b>Here you can make backups for small and not critical databases for free</b>
           </p>
         </div>
 
@@ -114,7 +115,8 @@ export const PlaygroundWarningComponent = (): JSX.Element => {
             No, because playground use only read-only users and cannot affect your DB. Only issue
             you can face is instability: playground background workers frequently reloaded so backup
             can be slower or be restarted due to app restart. Do not rely production DBs on
-            playground, please
+            playground, please. At once we may clean backups or something like this. At least, check
+            your backups here once a week
           </p>
         </div>
 

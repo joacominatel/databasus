@@ -204,6 +204,13 @@ export const EditBackupConfigComponent = ({
     try {
       const storages = await storageApi.getStorages(database.workspaceId);
       setStorages(storages);
+
+      if (IS_CLOUD) {
+        const systemStorages = storages.filter((s) => s.isSystem);
+        if (systemStorages.length > 0) {
+          updateBackupConfig({ storage: systemStorages[0] });
+        }
+      }
     } catch (e) {
       alert((e as Error).message);
     }
