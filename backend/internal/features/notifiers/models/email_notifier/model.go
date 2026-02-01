@@ -130,10 +130,7 @@ func (e *EmailNotifier) buildEmailContent(heading, message, from string) []byte 
 	// This ensures compatibility with SMTP servers that don't support SMTPUTF8
 	encodedSubject := encodeRFC2047(heading)
 	subject := fmt.Sprintf("Subject: %s\r\n", encodedSubject)
-	// Get the current time
-	now := time.Now()
-	// Generate Date header that is compliant with RFC 5322 using the format from RFC 1123Z
-	dateHeader := fmt.Sprintf("Date: %s\r\n", now.Format(time.RFC1123Z))
+	dateHeader := fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 
 	mimeHeaders := fmt.Sprintf(
 		"MIME-version: 1.0;\nContent-Type: %s; charset=\"%s\";\n\n",

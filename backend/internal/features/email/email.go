@@ -52,10 +52,7 @@ func (s *EmailSMTPSender) buildEmailContent(to, subject, body, from string) []by
 	// Encode Subject header using RFC 2047 to avoid SMTPUTF8 requirement
 	encodedSubject := encodeRFC2047(subject)
 	subjectHeader := fmt.Sprintf("Subject: %s\r\n", encodedSubject)
-	// Get the current time
-	now := time.Now()
-	// Generate Date header that is compliant with RFC 5322 using the format from RFC 1123Z
-	dateHeader := fmt.Sprintf("Date: %s\r\n", now.Format(time.RFC1123Z))
+	dateHeader := fmt.Sprintf("Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 
 	mimeHeaders := fmt.Sprintf(
 		"MIME-version: 1.0;\nContent-Type: %s; charset=\"%s\";\n\n",
