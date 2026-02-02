@@ -101,7 +101,9 @@ export function UserAuditLogsSidebarComponent({ user }: Props) {
       dataIndex: 'message',
       key: 'message',
       width: 350,
-      render: (message: string) => <span className="text-xs text-gray-900">{message}</span>,
+      render: (message: string) => (
+        <span className="text-xs text-gray-900 dark:text-white">{message}</span>
+      ),
     },
     {
       title: 'Workspace',
@@ -111,7 +113,9 @@ export function UserAuditLogsSidebarComponent({ user }: Props) {
       render: (workspaceId: string | undefined) => (
         <span
           className={`inline-block rounded-full px-2 py-1 text-xs font-medium ${
-            workspaceId ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
+            workspaceId
+              ? 'bg-blue-100 text-blue-800'
+              : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-white'
           }`}
         >
           {workspaceId || '-'}
@@ -127,7 +131,7 @@ export function UserAuditLogsSidebarComponent({ user }: Props) {
         const date = dayjs(createdAt);
         const timeFormat = getUserTimeFormat();
         return (
-          <span className="text-xs text-gray-700">
+          <span className="text-xs text-gray-700 dark:text-white">
             {`${date.format(timeFormat.format)} (${date.fromNow()})`}
           </span>
         );
