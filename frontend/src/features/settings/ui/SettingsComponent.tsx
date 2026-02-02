@@ -218,7 +218,7 @@ export function SettingsComponent({ contentHeight }: Props) {
           <div className="mt-3 text-sm text-gray-500 dark:text-gray-400">
             Read more about settings you can{' '}
             <a
-              href="https://databasus.com/access-management/#global-settings"
+              href="https://databasus.com/access-management#global-settings"
               target="_blank"
               rel="noreferrer"
               className="!text-blue-600"
