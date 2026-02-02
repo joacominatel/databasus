@@ -272,10 +272,13 @@ window.__RUNTIME_CONFIG__ = {
 };
 JSEOF
 
-# Inject analytics script if provided
+# Inject analytics script if provided (only if not already injected)
 if [ -n "\${ANALYTICS_SCRIPT:-}" ]; then
-  echo "Injecting analytics script..."
-  sed -i "s#</head>#  \${ANALYTICS_SCRIPT}"$'\n'"  </head>#" /app/ui/build/index.html
+  if ! grep -q "rybbit.databasus.com" /app/ui/build/index.html 2>/dev/null; then
+    echo "Injecting analytics script..."
+    sed -i "s#</head>#  \${ANALYTICS_SCRIPT}\\
+  </head>#" /app/ui/build/index.html
+  fi
 fi
 
 # Ensure proper ownership of data directory
