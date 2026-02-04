@@ -25,6 +25,32 @@ func (s *StorageService) SetStorageDatabaseCounter(storageDatabaseCounter Storag
 	s.storageDatabaseCounter = storageDatabaseCounter
 }
 
+func (s *StorageService) OnBeforeWorkspaceDeletion(workspaceID uuid.UUID) error {
+	storages, err := s.storageRepository.FindByWorkspaceID(workspaceID)
+	if err != nil {
+		return fmt.Errorf("failed to get storages for workspace deletion: %w", err)
+	}
+
+	for _, storage := range storages {
+		if storage.IsSystem && storage.WorkspaceID != workspaceID {
+			// skip system storage from another workspace
+			continue
+		}
+
+		if storage.IsSystem && storage.WorkspaceID == workspaceID {
+			return fmt.Errorf(
+				"system storage cannot be deleted due to workspace deletion, please transfer or remove storage first",
+			)
+		}
+
+		if err := s.storageRepository.Delete(storage); err != nil {
+			return fmt.Errorf("failed to delete storage %s: %w", storage.ID, err)
+		}
+	}
+
+	return nil
+}
+
 func (s *StorageService) SaveStorage(
 	user *users_models.User,
 	workspaceID uuid.UUID,
@@ -348,21 +374,6 @@ func (s *StorageService) TransferStorageToWorkspace(
 		&user.ID,
 		&targetWorkspaceID,
 	)
-
-	return nil
-}
-
-func (s *StorageService) OnBeforeWorkspaceDeletion(workspaceID uuid.UUID) error {
-	storages, err := s.storageRepository.FindByWorkspaceID(workspaceID)
-	if err != nil {
-		return fmt.Errorf("failed to get storages for workspace deletion: %w", err)
-	}
-
-	for _, storage := range storages {
-		if err := s.storageRepository.Delete(storage); err != nil {
-			return fmt.Errorf("failed to delete storage %s: %w", storage.ID, err)
-		}
-	}
 
 	return nil
 }

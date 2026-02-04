@@ -21,6 +21,7 @@ import (
 	users_services "databasus-backend/internal/features/users/services"
 	users_testing "databasus-backend/internal/features/users/testing"
 	workspaces_controllers "databasus-backend/internal/features/workspaces/controllers"
+	workspaces_repositories "databasus-backend/internal/features/workspaces/repositories"
 	workspaces_testing "databasus-backend/internal/features/workspaces/testing"
 	"databasus-backend/internal/util/encryption"
 	test_utils "databasus-backend/internal/util/testing"
@@ -1969,6 +1970,143 @@ func Test_TransferSystemStorage_TransferBlocked(t *testing.T) {
 	workspaces_testing.RemoveTestWorkspace(workspaceB, router)
 }
 
+func Test_DeleteWorkspace_SystemStoragesFromAnotherWorkspaceNotRemovedAndWorkspaceDeletedSuccessfully(
+	t *testing.T,
+) {
+	router := createRouter()
+	GetStorageService().SetStorageDatabaseCounter(&mockStorageDatabaseCounter{})
+
+	admin := users_testing.CreateTestUser(users_enums.UserRoleAdmin)
+	workspaceA := workspaces_testing.CreateTestWorkspace("Workspace A", admin, router)
+	workspaceD := workspaces_testing.CreateTestWorkspace("Workspace D", admin, router)
+
+	// Create a system storage in workspace A
+	systemStorage := &Storage{
+		WorkspaceID:  workspaceA.ID,
+		Type:         StorageTypeLocal,
+		Name:         "Test System Storage " + uuid.New().String(),
+		IsSystem:     true,
+		LocalStorage: &local_storage.LocalStorage{},
+	}
+	var savedSystemStorage Storage
+	test_utils.MakePostRequestAndUnmarshal(
+		t,
+		router,
+		"/api/v1/storages",
+		"Bearer "+admin.Token,
+		*systemStorage,
+		http.StatusOK,
+		&savedSystemStorage,
+	)
+	assert.True(t, savedSystemStorage.IsSystem)
+	assert.Equal(t, workspaceA.ID, savedSystemStorage.WorkspaceID)
+
+	// Create a regular storage in workspace D
+	regularStorage := createNewStorage(workspaceD.ID)
+	var savedRegularStorage Storage
+	test_utils.MakePostRequestAndUnmarshal(
+		t,
+		router,
+		"/api/v1/storages",
+		"Bearer "+admin.Token,
+		*regularStorage,
+		http.StatusOK,
+		&savedRegularStorage,
+	)
+	assert.False(t, savedRegularStorage.IsSystem)
+	assert.Equal(t, workspaceD.ID, savedRegularStorage.WorkspaceID)
+
+	// Delete workspace D
+	workspaces_testing.DeleteWorkspace(workspaceD, admin.Token, router)
+
+	// Verify system storage from workspace A still exists
+	repository := &StorageRepository{}
+	systemStorageAfterDeletion, err := repository.FindByID(savedSystemStorage.ID)
+	assert.NoError(t, err, "System storage should still exist after workspace D deletion")
+	assert.NotNil(t, systemStorageAfterDeletion)
+	assert.Equal(t, savedSystemStorage.ID, systemStorageAfterDeletion.ID)
+	assert.True(t, systemStorageAfterDeletion.IsSystem)
+	assert.Equal(t, workspaceA.ID, systemStorageAfterDeletion.WorkspaceID)
+
+	// Verify regular storage from workspace D was deleted
+	regularStorageAfterDeletion, err := repository.FindByID(savedRegularStorage.ID)
+	assert.Error(t, err, "Regular storage should be deleted with workspace D")
+	assert.Nil(t, regularStorageAfterDeletion)
+
+	// Cleanup
+	deleteStorage(t, router, savedSystemStorage.ID, admin.Token)
+	workspaces_testing.RemoveTestWorkspace(workspaceA, router)
+}
+
+func Test_DeleteWorkspace_WithOwnSystemStorage_ReturnsForbidden(t *testing.T) {
+	router := createRouter()
+	GetStorageService().SetStorageDatabaseCounter(&mockStorageDatabaseCounter{})
+
+	admin := users_testing.CreateTestUser(users_enums.UserRoleAdmin)
+	workspaceA := workspaces_testing.CreateTestWorkspace("Workspace A", admin, router)
+
+	// Create a system storage assigned to workspace A
+	systemStorage := &Storage{
+		WorkspaceID:  workspaceA.ID,
+		Type:         StorageTypeLocal,
+		Name:         "System Storage in A " + uuid.New().String(),
+		IsSystem:     true,
+		LocalStorage: &local_storage.LocalStorage{},
+	}
+
+	var savedSystemStorage Storage
+	test_utils.MakePostRequestAndUnmarshal(
+		t,
+		router,
+		"/api/v1/storages",
+		"Bearer "+admin.Token,
+		*systemStorage,
+		http.StatusOK,
+		&savedSystemStorage,
+	)
+	assert.True(t, savedSystemStorage.IsSystem)
+	assert.Equal(t, workspaceA.ID, savedSystemStorage.WorkspaceID)
+
+	// Attempt to delete workspace A - should fail because it has a system storage
+	resp := workspaces_testing.MakeAPIRequest(
+		router,
+		"DELETE",
+		"/api/v1/workspaces/"+workspaceA.ID.String(),
+		"Bearer "+admin.Token,
+		nil,
+	)
+	assert.Equal(t, http.StatusBadRequest, resp.Code, "Workspace deletion should fail")
+	assert.Contains(
+		t,
+		resp.Body.String(),
+		"system storage cannot be deleted due to workspace deletion",
+		"Error message should indicate system storage prevents deletion",
+	)
+
+	// Verify workspace still exists
+	workspaceRepo := &workspaces_repositories.WorkspaceRepository{}
+	workspaceAfterFailedDeletion, err := workspaceRepo.GetWorkspaceByID(workspaceA.ID)
+	assert.NoError(t, err, "Workspace should still exist after failed deletion")
+	assert.NotNil(t, workspaceAfterFailedDeletion)
+	assert.Equal(t, workspaceA.ID, workspaceAfterFailedDeletion.ID)
+
+	// Verify system storage still exists
+	repository := &StorageRepository{}
+	storageAfterFailedDeletion, err := repository.FindByID(savedSystemStorage.ID)
+	assert.NoError(t, err, "System storage should still exist after failed deletion")
+	assert.NotNil(t, storageAfterFailedDeletion)
+	assert.Equal(t, savedSystemStorage.ID, storageAfterFailedDeletion.ID)
+	assert.True(t, storageAfterFailedDeletion.IsSystem)
+
+	// Cleanup: Delete system storage first, then workspace can be deleted
+	deleteStorage(t, router, savedSystemStorage.ID, admin.Token)
+	workspaces_testing.DeleteWorkspace(workspaceA, admin.Token, router)
+
+	// Verify workspace was successfully deleted after storage removal
+	_, err = workspaceRepo.GetWorkspaceByID(workspaceA.ID)
+	assert.Error(t, err, "Workspace should be deleted after storage was removed")
+}
+
 func createRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -1983,6 +2121,7 @@ func createRouter() *gin.Engine {
 	}
 
 	audit_logs.SetupDependencies()
+	SetupDependencies()
 	GetStorageService().SetStorageDatabaseCounter(&mockStorageDatabaseCounter{})
 
 	return router
