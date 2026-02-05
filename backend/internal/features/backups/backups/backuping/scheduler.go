@@ -103,6 +103,16 @@ func (s *BackupsScheduler) IsSchedulerRunning() bool {
 	return s.lastBackupTime.After(time.Now().UTC().Add(-schedulerHealthcheckThreshold))
 }
 
+func (s *BackupsScheduler) IsBackupNodesAvailable() bool {
+	nodes, err := s.backupNodesRegistry.GetAvailableNodes()
+	if err != nil {
+		s.logger.Error("Failed to get available nodes for health check", "error", err)
+		return false
+	}
+
+	return len(nodes) > 0
+}
+
 func (s *BackupsScheduler) StartBackup(databaseID uuid.UUID, isCallNotifier bool) {
 	backupConfig, err := s.backupConfigService.GetBackupConfigByDbId(databaseID)
 	if err != nil {

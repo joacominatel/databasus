@@ -52,6 +52,10 @@ func (s *HealthcheckService) performHealthCheck() error {
 		if !s.backupBackgroundService.IsSchedulerRunning() {
 			return errors.New("backups are not running for more than 5 minutes")
 		}
+
+		if !s.backupBackgroundService.IsBackupNodesAvailable() {
+			return errors.New("no backup nodes available")
+		}
 	}
 
 	if config.GetEnv().IsProcessingNode {
