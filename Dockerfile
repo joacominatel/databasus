@@ -431,6 +431,8 @@ fi
 exec ./main
 EOF
 
+LABEL org.opencontainers.image.source="https://github.com/databasus/databasus"
+
 RUN chmod +x /app/start.sh
 
 EXPOSE 4005

@@ -1,7 +1,6 @@
 import { Modal, Spin } from 'antd';
 import { useEffect, useState } from 'react';
 
-import { GOOGLE_DRIVE_OAUTH_REDIRECT_URL } from '../constants';
 import { type Storage, StorageType } from '../entity/storages';
 import type { StorageOauthDto } from '../entity/storages/models/StorageOauthDto';
 import type { UserProfile } from '../entity/users';
@@ -21,7 +20,7 @@ export function OauthStorageComponent() {
     const { clientId, clientSecret } = oauthDto.storage.googleDriveStorage;
     const { authCode } = oauthDto;
 
-    const redirectUri = oauthDto.redirectUrl || GOOGLE_DRIVE_OAUTH_REDIRECT_URL;
+    const redirectUri = `${window.location.origin}/storages/google-oauth`;
 
     try {
       // Exchange authorization code for access token
@@ -84,33 +83,14 @@ export function OauthStorageComponent() {
       });
 
     const urlParams = new URLSearchParams(window.location.search);
-
-    // Attempt 1: Check for the 'oauthDto' param (Third-party/Legacy way)
-    const oauthDtoParam = urlParams.get('oauthDto');
-    if (oauthDtoParam) {
-      try {
-        const decodedParam = decodeURIComponent(oauthDtoParam);
-        const oauthDto: StorageOauthDto = JSON.parse(decodedParam);
-        processOauthDto(oauthDto);
-        return;
-      } catch (e) {
-        console.error('Error parsing oauthDto parameter:', e);
-        alert('Malformed OAuth parameter received');
-        return;
-      }
-    }
-
-    // Attempt 2: Check for 'code' and 'state' (Direct Google/Local way)
     const code = urlParams.get('code');
     const state = urlParams.get('state');
 
     if (code && state) {
       try {
-        // The 'state' parameter contains our stringified StorageOauthDto
         const decodedState = decodeURIComponent(state);
         const oauthDto: StorageOauthDto = JSON.parse(decodedState);
 
-        // Inject the authorization code received from Google
         oauthDto.authCode = code;
 
         processOauthDto(oauthDto);
@@ -122,7 +102,6 @@ export function OauthStorageComponent() {
       }
     }
 
-    // Attempt 3: No valid parameters found
     alert('OAuth param not found. Ensure the redirect URL is configured correctly.');
   }, []);
 

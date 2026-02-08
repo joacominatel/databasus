@@ -1,35 +1,37 @@
 # Agent Rules and Guidelines
 
-This document contains all coding standards, conventions and best practices recommended for the Databasus project.
+This document contains all coding standards, conventions and best practices recommended for the TgTaps project.
 This is NOT a strict set of rules, but a set of recommendations to help you write better code.
 
 ---
 
 ## Table of Contents
 
-- [Engineering Philosophy](#engineering-philosophy)
-- [Backend Guidelines](#backend-guidelines)
-  - [Code Style](#code-style)
+- [Engineering philosophy](#engineering-philosophy)
+- [Backend guidelines](#backend-guidelines)
+  - [Code style](#code-style)
+  - [Boolean naming](#boolean-naming)
+  - [Add reasonable new lines between logical statements](#add-reasonable-new-lines-between-logical-statements)
   - [Comments](#comments)
   - [Controllers](#controllers)
-  - [Dependency Injection (DI)](#dependency-injection-di)
+  - [Dependency injection (DI)](#dependency-injection-di)
   - [Migrations](#migrations)
   - [Refactoring](#refactoring)
   - [Testing](#testing)
-  - [Time Handling](#time-handling)
-  - [CRUD Examples](#crud-examples)
-- [Frontend Guidelines](#frontend-guidelines)
-  - [React Component Structure](#react-component-structure)
+  - [Time handling](#time-handling)
+  - [CRUD examples](#crud-examples)
+- [Frontend guidelines](#frontend-guidelines)
+  - [React component structure](#react-component-structure)
 
 ---
 
-## Engineering Philosophy
+## Engineering philosophy
 
 **Think like a skeptical senior engineer and code reviewer. Don't just do what was asked—also think about what should have been asked.**
 
 ⚠️ **Balance vigilance with pragmatism:** Catch real issues, not theoretical ones. Don't let perfect be the enemy of good.
 
-### Task Context Assessment:
+### Task context assessment:
 
 **First, assess the task scope:**
 
@@ -38,7 +40,7 @@ This is NOT a strict set of rules, but a set of recommendations to help you writ
 - **Complex** (architecture, security, performance-critical): Full analysis required
 - **Unclear** (ambiguous requirements): Always clarify assumptions first
 
-### For Non-Trivial Tasks:
+### For non-trivial tasks:
 
 1. **Restate the objective and list assumptions** (explicit + implicit)
    - If any assumption is shaky, call it out clearly
@@ -71,7 +73,7 @@ This is NOT a strict set of rules, but a set of recommendations to help you writ
    - Patch the answer accordingly
    - Verify edge cases are handled
 
-### Application Guidelines:
+### Application guidelines:
 
 **Scale your response to the task:**
 
@@ -84,9 +86,9 @@ This is NOT a strict set of rules, but a set of recommendations to help you writ
 
 ---
 
-## Backend Guidelines
+## Backend guidelines
 
-### Code Style
+### Code style
 
 **Always place private methods to the bottom of file**
 
@@ -94,7 +96,7 @@ This rule applies to ALL Go files including tests, services, controllers, reposi
 
 In Go, exported (public) functions/methods start with uppercase letters, while unexported (private) ones start with lowercase letters.
 
-#### Structure Order:
+#### Structure order:
 
 1. Type definitions and constants
 2. Public methods/functions (uppercase)
@@ -227,7 +229,7 @@ func (c *ProjectController) extractProjectID(ctx *gin.Context) uuid.UUID {
 }
 ```
 
-#### Key Points:
+#### Key points:
 
 - **Exported/Public** = starts with uppercase letter (CreateUser, GetProject)
 - **Unexported/Private** = starts with lowercase letter (validateUser, handleError)
@@ -237,13 +239,13 @@ func (c *ProjectController) extractProjectID(ctx *gin.Context) uuid.UUID {
 
 ---
 
-### Boolean Naming
+### Boolean naming
 
 **Always prefix boolean variables with verbs like `is`, `has`, `was`, `should`, `can`, etc.**
 
 This makes the code more readable and clearly indicates that the variable represents a true/false state.
 
-#### Good Examples:
+#### Good examples:
 
 ```go
 type User struct {
@@ -265,7 +267,7 @@ wasCompleted := false
 hasPermission := checkPermissions()
 ```
 
-#### Bad Examples:
+#### Bad examples:
 
 ```go
 type User struct {
@@ -286,7 +288,7 @@ completed := false   // Should be: wasCompleted
 permission := true   // Should be: hasPermission
 ```
 
-#### Common Boolean Prefixes:
+#### Common boolean prefixes:
 
 - **is** - current state (IsActive, IsValid, IsEnabled)
 - **has** - possession or presence (HasAccess, HasPermission, HasError)
@@ -294,6 +296,167 @@ permission := true   // Should be: hasPermission
 - **should** - intention or recommendation (ShouldRetry, ShouldCompress)
 - **can** - capability or permission (CanRetry, CanDelete, CanEdit)
 - **will** - future state (WillExpire, WillRetry)
+
+---
+
+### Add reasonable new lines between logical statements
+
+**Add blank lines between logical blocks to improve code readability.**
+
+Separate different logical operations within a function with blank lines. This makes the code flow clearer and helps identify distinct steps in the logic.
+
+#### Guidelines:
+
+- Add blank line before final `return` statement
+- Add blank line after variable declarations before using them
+- Add blank line between error handling and subsequent logic
+- Add blank line between different logical operations
+
+#### Bad example (without spacing):
+
+```go
+func (t *Task) BeforeSave(tx *gorm.DB) error {
+	if len(t.Messages) > 0 {
+		messagesBytes, err := json.Marshal(t.Messages)
+		if err != nil {
+			return err
+		}
+		t.MessagesJSON = string(messagesBytes)
+	}
+	return nil
+}
+
+func (t *Task) AfterFind(tx *gorm.DB) error {
+	if t.MessagesJSON != "" {
+		var messages []onewin_dto.TaskCompletionMessage
+		if err := json.Unmarshal([]byte(t.MessagesJSON), &messages); err != nil {
+			return err
+		}
+		t.Messages = messages
+	}
+	return nil
+}
+```
+
+#### Good example (with proper spacing):
+
+```go
+func (t *Task) BeforeSave(tx *gorm.DB) error {
+	if len(t.Messages) > 0 {
+		messagesBytes, err := json.Marshal(t.Messages)
+		if err != nil {
+			return err
+		}
+
+		t.MessagesJSON = string(messagesBytes)
+	}
+
+	return nil
+}
+
+func (t *Task) AfterFind(tx *gorm.DB) error {
+	if t.MessagesJSON != "" {
+		var messages []onewin_dto.TaskCompletionMessage
+		if err := json.Unmarshal([]byte(t.MessagesJSON), &messages); err != nil {
+			return err
+		}
+
+		t.Messages = messages
+	}
+
+	return nil
+}
+```
+
+#### More examples:
+
+**Service method with multiple operations:**
+
+```go
+func (s *UserService) CreateUser(request *CreateUserRequest) (*User, error) {
+	// Validate input
+	if err := s.validateUserRequest(request); err != nil {
+		return nil, err
+	}
+
+	// Create user entity
+	user := &User{
+		ID:    uuid.New(),
+		Name:  request.Name,
+		Email: request.Email,
+	}
+
+	// Save to database
+	if err := s.repository.Create(user); err != nil {
+		return nil, err
+	}
+
+	// Send notification
+	s.notificationService.SendWelcomeEmail(user.Email)
+
+	return user, nil
+}
+```
+
+**Repository method with query building:**
+
+```go
+func (r *Repository) GetFiltered(filters *Filters) ([]*Entity, error) {
+	query := storage.GetDb().Model(&Entity{})
+
+	if filters.Status != "" {
+		query = query.Where("status = ?", filters.Status)
+	}
+
+	if filters.CreatedAfter != nil {
+		query = query.Where("created_at > ?", filters.CreatedAfter)
+	}
+
+	var entities []*Entity
+	if err := query.Find(&entities).Error; err != nil {
+		return nil, err
+	}
+
+	return entities, nil
+}
+```
+
+**Repository method with error handling:**
+
+Bad (without spacing):
+
+```go
+func (r *Repository) FindById(id uuid.UUID) (*models.Task, error) {
+	var task models.Task
+	result := storage.GetDb().Where("id = ?", id).First(&task)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil, errors.New("task not found")
+		}
+		return nil, result.Error
+	}
+	return &task, nil
+}
+```
+
+Good (with proper spacing):
+
+```go
+func (r *Repository) FindById(id uuid.UUID) (*models.Task, error) {
+	var task models.Task
+
+	result := storage.GetDb().Where("id = ?", id).First(&task)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil, errors.New("task not found")
+		}
+
+		return nil, result.Error
+	}
+
+	return &task, nil
+}
+```
 
 ---
 
@@ -305,13 +468,14 @@ permission := true   // Should be: hasPermission
 2. **Functions and variables should have meaningful names** - Code should be self-documenting
 3. **Comments for unclear code only** - Only add comments when code logic isn't immediately clear
 
-#### Key Principles:
+#### Key principles:
 
 - **Code should tell a story** - Use descriptive variable and function names
 - **Comments explain WHY, not WHAT** - The code shows what happens, comments explain business logic or complex decisions
 - **Prefer refactoring over commenting** - If code needs explaining, consider making it clearer instead
 - **API documentation is required** - Swagger comments for all HTTP endpoints are mandatory
 - **Complex algorithms deserve comments** - Mathematical formulas, business rules, or non-obvious optimizations
+- **Do not write summary sections in .md files unless directly requested** - Avoid adding "Summary" or "Conclusion" sections at the end of documentation files unless the user explicitly asks for them
 
 #### Example of useless comments:
 
@@ -343,7 +507,7 @@ func CreateValidLogItems(count int, uniqueID string) []logs_receiving.LogItemReq
 
 ### Controllers
 
-#### Controller Guidelines:
+#### Controller guidelines:
 
 1. **When we write controller:**
    - We combine all routes to single controller
@@ -475,7 +639,7 @@ func (c *AuditLogController) GetUserAuditLogs(ctx *gin.Context) {
 
 ---
 
-### Dependency Injection (DI)
+### Dependency injection (DI)
 
 For DI files use **implicit fields declaration styles** (especially for controllers, services, repositories, use cases, etc., not simple data structures).
 
@@ -503,7 +667,7 @@ var orderController = &OrderController{
 
 **This is needed to avoid forgetting to update DI style when we add new dependency.**
 
-#### Force Such Usage
+#### Force such usage
 
 Please force such usage if file look like this (see some services\controllers\repos definitions and getters):
 
@@ -549,13 +713,13 @@ func GetOrderRepository() *repositories.OrderRepository {
 }
 ```
 
-#### SetupDependencies() Pattern
+#### SetupDependencies() pattern
 
 **All `SetupDependencies()` functions must use sync.Once to ensure idempotent execution.**
 
 This pattern allows `SetupDependencies()` to be safely called multiple times (especially in tests) while ensuring the actual setup logic executes only once.
 
-**Implementation Pattern:**
+**Implementation pattern:**
 
 ```go
 package feature
@@ -588,7 +752,7 @@ func SetupDependencies() {
 }
 ```
 
-**Why This Pattern:**
+**Why this pattern:**
 
 - **Tests can call multiple times**: Test setup often calls `SetupDependencies()` multiple times without issues
 - **Thread-safe**: Works correctly with concurrent calls (nanoseconds or seconds apart)
@@ -604,13 +768,13 @@ func SetupDependencies() {
 
 ---
 
-### Background Services
+### Background services
 
 **All background service `Run()` methods must panic if called multiple times to prevent corrupted states.**
 
 Background services run infinite loops and must never be started twice on the same instance. Multiple calls indicate a serious bug that would cause duplicate goroutines, resource leaks, and data corruption.
 
-**Implementation Pattern:**
+**Implementation pattern:**
 
 ```go
 package feature
@@ -654,14 +818,14 @@ func (s *BackgroundService) Run(ctx context.Context) {
 }
 ```
 
-**Why Panic Instead of Warning:**
+**Why panic instead of warning:**
 
 - **Prevents corruption**: Multiple `Run()` calls would create duplicate goroutines consuming resources
 - **Fails fast**: Catches critical bugs immediately in tests and production
 - **Clear indication**: Panic clearly indicates a serious programming error
 - **Applies everywhere**: Same protection in tests and production
 
-**When This Applies:**
+**When this applies:**
 
 - All background services with infinite loops
 - Registry services (BackupNodesRegistry, RestoreNodesRegistry)
@@ -727,14 +891,14 @@ You can shortify, make more readable, improve code quality, etc. Common logic ca
 
 **After writing tests, always launch them and verify that they pass.**
 
-#### Test Naming Format
+#### Test naming format
 
 Use these naming patterns:
 
 - `Test_WhatWeDo_WhatWeExpect`
 - `Test_WhatWeDo_WhichConditions_WhatWeExpect`
 
-#### Examples from Real Codebase:
+#### Examples from real codebase:
 
 - `Test_CreateApiKey_WhenUserIsProjectOwner_ApiKeyCreated`
 - `Test_UpdateProject_WhenUserIsProjectAdmin_ProjectUpdated`
@@ -742,22 +906,22 @@ Use these naming patterns:
 - `Test_GetProjectAuditLogs_WithDifferentUserRoles_EnforcesPermissionsCorrectly`
 - `Test_ProjectLifecycleE2E_CompletesSuccessfully`
 
-#### Testing Philosophy
+#### Testing philosophy
 
-**Prefer Controllers Over Unit Tests:**
+**Prefer controllers over unit tests:**
 
 - Test through HTTP endpoints via controllers whenever possible
 - Avoid testing repositories, services in isolation - test via API instead
 - Only use unit tests for complex model logic when no API exists
 - Name test files `controller_test.go` or `service_test.go`, not `integration_test.go`
 
-**Extract Common Logic to Testing Utilities:**
+**Extract common logic to testing utilities:**
 
 - Create `testing.go` or `testing/testing.go` files for shared test utilities
 - Extract router creation, user setup, models creation helpers (in API, not just structs creation)
 - Reuse common patterns across different test files
 
-**Refactor Existing Tests:**
+**Refactor existing tests:**
 
 - When working with existing tests, always look for opportunities to refactor and improve
 - Extract repetitive setup code to common utilities
@@ -766,7 +930,7 @@ Use these naming patterns:
 - Consolidate similar test patterns across different test files
 - Make tests more readable and maintainable for other developers
 
-**Clean Up Test Data:**
+**Clean up test data:**
 
 - If the feature supports cleanup operations (DELETE endpoints, cleanup methods), use them in tests
 - Clean up resources after test execution to avoid test data pollution
@@ -803,7 +967,7 @@ func Test_BackupLifecycle_CreateAndDelete(t *testing.T) {
 }
 ```
 
-#### Testing Utilities Structure
+#### Testing utilities structure
 
 **Create `testing.go` or `testing/testing.go` files with common utilities:**
 
@@ -839,7 +1003,7 @@ func AddMemberToProject(project *projects_models.Project, member *users_dto.Sign
 }
 ```
 
-#### Controller Test Examples
+#### Controller test examples
 
 **Permission-based testing:**
 
@@ -906,7 +1070,7 @@ func Test_ProjectLifecycleE2E_CompletesSuccessfully(t *testing.T) {
 
 ---
 
-### Time Handling
+### Time handling
 
 **Always use `time.Now().UTC()` instead of `time.Now()`**
 
@@ -914,7 +1078,7 @@ This ensures consistent timezone handling across the application.
 
 ---
 
-### CRUD Examples
+### CRUD examples
 
 This is an example of complete CRUD implementation structure:
 
@@ -1578,9 +1742,9 @@ func createTimedLog(db *gorm.DB, userID *uuid.UUID, message string, createdAt ti
 
 ---
 
-## Frontend Guidelines
+## Frontend guidelines
 
-### React Component Structure
+### React component structure
 
 Write React components with the following structure:
 
@@ -1614,7 +1778,7 @@ export const ReactComponent = ({ someValue }: Props): JSX.Element => {
 }
 ```
 
-#### Structure Order:
+#### Structure order:
 
 1. **Props interface** - Define component props
 2. **Helper functions** (outside component) - Pure utility functions
