@@ -23,6 +23,7 @@ import (
 	backups_config_logical "databasus-backend/internal/features/backups/config/logical"
 	"databasus-backend/internal/features/databases"
 	mariadbtypes "databasus-backend/internal/features/databases/databases/mariadb"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
 	encryption_secrets "databasus-backend/internal/features/encryption/secrets"
 	"databasus-backend/internal/features/storages"
 	"databasus-backend/internal/util/encryption"
@@ -78,10 +79,17 @@ func (uc *CreateMariadbBackupUsecase) Execute(
 		"storageId", storage.ID,
 	)
 
-	mdb := db.Mariadb
-	if mdb == nil {
+	if db.Mariadb == nil {
 		return nil, fmt.Errorf("mariadb database configuration is required")
 	}
+
+	reachableDatabase, openedTunnel, err := db.OpenReachableDatabase(ctx, uc.logger, uc.fieldEncryptor)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open the ssh tunnel to the mariadb server: %w", err)
+	}
+	defer uc.closeTunnel(db.ID, openedTunnel)
+
+	mdb := reachableDatabase.Mariadb
 
 	if mdb.Database == nil || *mdb.Database == "" {
 		return nil, fmt.Errorf("database name is required for mariadb-dump backups")
@@ -114,6 +122,19 @@ func (uc *CreateMariadbBackupUsecase) Execute(
 		backupProgressListener,
 		mdb,
 	)
+}
+
+func (uc *CreateMariadbBackupUsecase) closeTunnel(
+	databaseID uuid.UUID,
+	openedTunnel *ssh_tunnel.OpenedTunnel,
+) {
+	if openedTunnel == nil {
+		return
+	}
+
+	if err := openedTunnel.Close(); err != nil {
+		uc.logger.Error("failed to close ssh tunnel", "database_id", databaseID, "error", err)
+	}
 }
 
 func (uc *CreateMariadbBackupUsecase) buildMariadbDumpArgs(
