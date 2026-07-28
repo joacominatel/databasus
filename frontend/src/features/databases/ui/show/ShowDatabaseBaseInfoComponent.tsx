@@ -3,6 +3,7 @@ import {
   getDatabaseLogoFromType,
   getDatabaseTypeLabel,
 } from '../../../../entity/databases';
+import { ShowSshTunnelComponent } from './ShowSshTunnelComponent';
 
 interface Props {
   database: Database;
@@ -33,6 +34,8 @@ export const ShowDatabaseBaseInfoComponent = ({ database, isShowName, isShowType
           </div>
         </div>
       )}
+
+      <ShowSshTunnelComponent database={database} />
     </div>
   );
 };
