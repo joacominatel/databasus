@@ -23,6 +23,7 @@ import (
 	backups_config_logical "databasus-backend/internal/features/backups/config/logical"
 	"databasus-backend/internal/features/databases"
 	mysqltypes "databasus-backend/internal/features/databases/databases/mysql"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
 	encryption_secrets "databasus-backend/internal/features/encryption/secrets"
 	"databasus-backend/internal/features/storages"
 	"databasus-backend/internal/util/encryption"
@@ -78,10 +79,17 @@ func (uc *CreateMysqlBackupUsecase) Execute(
 		"storageId", storage.ID,
 	)
 
-	my := db.Mysql
-	if my == nil {
+	if db.Mysql == nil {
 		return nil, fmt.Errorf("mysql database configuration is required")
 	}
+
+	reachableDatabase, openedTunnel, err := db.OpenReachableDatabase(ctx, uc.logger, uc.fieldEncryptor)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open the ssh tunnel to the mysql database: %w", err)
+	}
+	defer uc.closeSshTunnel(openedTunnel)
+
+	my := reachableDatabase.Mysql
 
 	if my.Database == nil || *my.Database == "" {
 		return nil, fmt.Errorf("database name is required for mysqldump backups")
@@ -114,6 +122,16 @@ func (uc *CreateMysqlBackupUsecase) Execute(
 		backupProgressListener,
 		my,
 	)
+}
+
+func (uc *CreateMysqlBackupUsecase) closeSshTunnel(openedTunnel *ssh_tunnel.OpenedTunnel) {
+	if openedTunnel == nil {
+		return
+	}
+
+	if err := openedTunnel.Close(); err != nil {
+		uc.logger.Error("failed to close ssh tunnel after mysql backup", "error", err)
+	}
 }
 
 func (uc *CreateMysqlBackupUsecase) buildMysqldumpArgs(my *mysqltypes.MysqlDatabase) []string {
