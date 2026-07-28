@@ -8,6 +8,7 @@ import (
 	"databasus-backend/internal/features/databases/databases/mongodb"
 	"databasus-backend/internal/features/databases/databases/mysql"
 	postgresql_logical "databasus-backend/internal/features/databases/databases/postgresql/logical"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
 	"databasus-backend/internal/storage"
 )
 
@@ -27,7 +28,8 @@ func (r *DatabaseRepository) Save(database *Database) (*Database, error) {
 		}
 
 		withoutAssociations := tx.Omit(
-			"PostgresqlLogical", "PostgresqlPhysical", "Mysql", "Mariadb", "Mongodb", "Notifiers",
+			"PostgresqlLogical", "PostgresqlPhysical", "Mysql", "Mariadb", "Mongodb", "SshTunnel",
+			"Notifiers",
 		)
 
 		if isNew {
@@ -103,6 +105,10 @@ func (r *DatabaseRepository) Save(database *Database) (*Database, error) {
 			}
 		}
 
+		if err := saveSshTunnel(tx, database); err != nil {
+			return err
+		}
+
 		if err := tx.
 			Model(database).
 			Association("Notifiers").
@@ -119,6 +125,26 @@ func (r *DatabaseRepository) Save(database *Database) (*Database, error) {
 	return database, nil
 }
 
+// A database without a tunnel must leave no tunnel row behind: GORM keeps the orphan when the
+// association is cleared, so removal is an explicit delete.
+func saveSshTunnel(tx *gorm.DB, database *Database) error {
+	if database.SshTunnel == nil {
+		return tx.
+			Where("database_id = ?", database.ID).
+			Delete(&ssh_tunnel.Tunnel{}).Error
+	}
+
+	database.SshTunnel.DatabaseID = database.ID
+
+	if database.SshTunnel.ID == uuid.Nil {
+		database.SshTunnel.ID = uuid.New()
+
+		return tx.Create(database.SshTunnel).Error
+	}
+
+	return tx.Save(database.SshTunnel).Error
+}
+
 func (r *DatabaseRepository) FindByID(id uuid.UUID) (*Database, error) {
 	var database Database
 
@@ -129,6 +155,7 @@ func (r *DatabaseRepository) FindByID(id uuid.UUID) (*Database, error) {
 		Preload("Mysql").
 		Preload("Mariadb").
 		Preload("Mongodb").
+		Preload("SshTunnel").
 		Preload("Notifiers").
 		Where("id = ?", id).
 		First(&database).Error; err != nil {
@@ -148,6 +175,7 @@ func (r *DatabaseRepository) FindByWorkspaceID(workspaceID uuid.UUID) ([]*Databa
 		Preload("Mysql").
 		Preload("Mariadb").
 		Preload("Mongodb").
+		Preload("SshTunnel").
 		Preload("Notifiers").
 		Where("workspace_id = ?", workspaceID).
 		Order("CASE WHEN health_status = 'UNAVAILABLE' THEN 1 WHEN health_status = 'AVAILABLE' THEN 2 WHEN health_status IS NULL THEN 3 ELSE 4 END, name ASC").
@@ -230,6 +258,7 @@ func (r *DatabaseRepository) GetAllDatabases() ([]*Database, error) {
 		Preload("Mysql").
 		Preload("Mariadb").
 		Preload("Mongodb").
+		Preload("SshTunnel").
 		Preload("Notifiers").
 		Find(&databases).Error; err != nil {
 		return nil, err
