@@ -24,6 +24,7 @@ import (
 	backups_config_logical "databasus-backend/internal/features/backups/config/logical"
 	"databasus-backend/internal/features/databases"
 	mysqltypes "databasus-backend/internal/features/databases/databases/mysql"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
 	encryption_secrets "databasus-backend/internal/features/encryption/secrets"
 	restores_core "databasus-backend/internal/features/restores/core"
 	"databasus-backend/internal/features/storages"
@@ -56,10 +57,21 @@ func (uc *RestoreMysqlBackupUsecase) Execute(
 		"backupId", backup.ID,
 	)
 
-	my := restoringToDB.Mysql
-	if my == nil {
+	if restoringToDB.Mysql == nil {
 		return fmt.Errorf("mysql configuration is required for restore")
 	}
+
+	reachableDatabase, openedTunnel, err := restoringToDB.OpenReachableDatabase(
+		parentCtx,
+		uc.logger,
+		util_encryption.GetFieldEncryptor(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to open the ssh tunnel to the mysql database: %w", err)
+	}
+	defer uc.closeSshTunnel(openedTunnel)
+
+	my := reachableDatabase.Mysql
 
 	if my.Database == nil || *my.Database == "" {
 		return fmt.Errorf("target database name is required for mysql restore")
@@ -94,6 +106,16 @@ func (uc *RestoreMysqlBackupUsecase) Execute(
 		storage,
 		my,
 	)
+}
+
+func (uc *RestoreMysqlBackupUsecase) closeSshTunnel(openedTunnel *ssh_tunnel.OpenedTunnel) {
+	if openedTunnel == nil {
+		return
+	}
+
+	if err := openedTunnel.Close(); err != nil {
+		uc.logger.Error("failed to close ssh tunnel after mysql restore", "error", err)
+	}
 }
 
 func (uc *RestoreMysqlBackupUsecase) restoreFromStorage(
