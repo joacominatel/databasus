@@ -23,6 +23,7 @@ import (
 	"databasus-backend/internal/features/databases"
 	pgtypes "databasus-backend/internal/features/databases/databases/postgresql/logical"
 	postgresql_shared "databasus-backend/internal/features/databases/databases/postgresql/shared"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
 	encryption_secrets "databasus-backend/internal/features/encryption/secrets"
 	"databasus-backend/internal/features/storages"
 	"databasus-backend/internal/util/encryption"
@@ -76,11 +77,17 @@ func (uc *CreatePostgresqlBackupUsecase) Execute(
 		storage.ID,
 	)
 
-	pg := db.PostgresqlLogical
-
-	if pg == nil {
+	if db.PostgresqlLogical == nil {
 		return nil, fmt.Errorf("postgresql database configuration is required for pg_dump backups")
 	}
+
+	reachableDatabase, openedTunnel, err := db.OpenReachableDatabase(ctx, uc.logger, uc.fieldEncryptor)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open ssh tunnel to the postgresql database: %w", err)
+	}
+	defer uc.closeSshTunnel(openedTunnel)
+
+	pg := reachableDatabase.PostgresqlLogical
 
 	if pg.Database == nil || *pg.Database == "" {
 		return nil, fmt.Errorf("database name is required for pg_dump backups")
@@ -119,12 +126,21 @@ func (uc *CreatePostgresqlBackupUsecase) Execute(
 		args,
 		decryptedPassword,
 		storage,
-		db,
+		pg,
 		backupProgressListener,
 	)
 }
 
-// streamToStorage streams pg_dump output directly to storage
+func (uc *CreatePostgresqlBackupUsecase) closeSshTunnel(openedTunnel *ssh_tunnel.OpenedTunnel) {
+	if openedTunnel == nil {
+		return
+	}
+
+	if err := openedTunnel.Close(); err != nil {
+		uc.logger.Error("failed to close ssh tunnel", "error", err)
+	}
+}
+
 func (uc *CreatePostgresqlBackupUsecase) streamToStorage(
 	parentCtx context.Context,
 	backup *backups_core_logical.LogicalBackup,
@@ -133,7 +149,7 @@ func (uc *CreatePostgresqlBackupUsecase) streamToStorage(
 	args []string,
 	password string,
 	storage *storages.Storage,
-	db *databases.Database,
+	pg *pgtypes.PostgresqlLogicalDatabase,
 	backupProgressListener func(completedMBs float64),
 ) (*backups_core_logical.BackupMetadata, error) {
 	uc.logger.Info("Streaming PostgreSQL backup to storage", "pgBin", pgBin, "args", args)
@@ -142,7 +158,7 @@ func (uc *CreatePostgresqlBackupUsecase) streamToStorage(
 	defer cancel(nil)
 
 	credentials, err := postgresql_shared.WriteCredentialFilesToTempDir(
-		db.PostgresqlLogical.CredentialSpec(), password, uc.fieldEncryptor)
+		pg.CredentialSpec(), password, uc.fieldEncryptor)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create credential files: %w", err)
 	}
@@ -154,9 +170,9 @@ func (uc *CreatePostgresqlBackupUsecase) streamToStorage(
 	if err := uc.setupPgEnvironment(
 		cmd,
 		credentials,
-		db.PostgresqlLogical.SslMode,
+		pg.SslMode,
 		password,
-		db.PostgresqlLogical.CpuCount,
+		pg.CpuCount,
 		pgBin,
 	); err != nil {
 		return nil, err
