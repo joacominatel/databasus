@@ -20,6 +20,7 @@ import (
 	backups_config_logical "databasus-backend/internal/features/backups/config/logical"
 	"databasus-backend/internal/features/databases"
 	mongodbtypes "databasus-backend/internal/features/databases/databases/mongodb"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
 	encryption_secrets "databasus-backend/internal/features/encryption/secrets"
 	restores_core "databasus-backend/internal/features/restores/core"
 	"databasus-backend/internal/features/storages"
@@ -56,7 +57,19 @@ func (uc *RestoreMongodbBackupUsecase) Execute(
 		"backupId", backup.ID,
 	)
 
-	mdb := restoringToDB.Mongodb
+	fieldEncryptor := util_encryption.GetFieldEncryptor()
+
+	reachableDatabase, openedTunnel, err := restoringToDB.OpenReachableDatabase(
+		parentCtx,
+		uc.logger,
+		fieldEncryptor,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to open ssh tunnel to the target database: %w", err)
+	}
+	defer uc.closeTunnel(openedTunnel)
+
+	mdb := reachableDatabase.Mongodb
 	if mdb == nil {
 		return fmt.Errorf("mongodb configuration is required for restore")
 	}
@@ -65,7 +78,6 @@ func (uc *RestoreMongodbBackupUsecase) Execute(
 		return fmt.Errorf("target database name is required for mongorestore")
 	}
 
-	fieldEncryptor := util_encryption.GetFieldEncryptor()
 	decryptedPassword, err := fieldEncryptor.Decrypt(mdb.Password)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt password: %w", err)
@@ -85,6 +97,16 @@ func (uc *RestoreMongodbBackupUsecase) Execute(
 		backup,
 		storage,
 	)
+}
+
+func (uc *RestoreMongodbBackupUsecase) closeTunnel(openedTunnel *ssh_tunnel.OpenedTunnel) {
+	if openedTunnel == nil {
+		return
+	}
+
+	if err := openedTunnel.Close(); err != nil {
+		uc.logger.Error("failed to close ssh tunnel", "error", err)
+	}
 }
 
 func (uc *RestoreMongodbBackupUsecase) buildMongorestoreArgs(
