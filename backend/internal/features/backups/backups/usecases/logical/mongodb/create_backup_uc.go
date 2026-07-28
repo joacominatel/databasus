@@ -20,6 +20,7 @@ import (
 	backups_config_logical "databasus-backend/internal/features/backups/config/logical"
 	"databasus-backend/internal/features/databases"
 	mongodbtypes "databasus-backend/internal/features/databases/databases/mongodb"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
 	encryption_secrets "databasus-backend/internal/features/encryption/secrets"
 	"databasus-backend/internal/features/storages"
 	"databasus-backend/internal/util/encryption"
@@ -64,7 +65,17 @@ func (uc *CreateMongodbBackupUsecase) Execute(
 		"storageId", storage.ID,
 	)
 
-	mdb := db.Mongodb
+	reachableDatabase, openedTunnel, err := db.OpenReachableDatabase(
+		ctx,
+		uc.logger,
+		uc.fieldEncryptor,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open ssh tunnel to the database: %w", err)
+	}
+	defer uc.closeTunnel(openedTunnel)
+
+	mdb := reachableDatabase.Mongodb
 	if mdb == nil {
 		return nil, fmt.Errorf("mongodb database configuration is required")
 	}
@@ -98,6 +109,16 @@ func (uc *CreateMongodbBackupUsecase) Execute(
 		storage,
 		backupProgressListener,
 	)
+}
+
+func (uc *CreateMongodbBackupUsecase) closeTunnel(openedTunnel *ssh_tunnel.OpenedTunnel) {
+	if openedTunnel == nil {
+		return
+	}
+
+	if err := openedTunnel.Close(); err != nil {
+		uc.logger.Error("failed to close ssh tunnel", "error", err)
+	}
 }
 
 func (uc *CreateMongodbBackupUsecase) buildMongodumpArgs(
