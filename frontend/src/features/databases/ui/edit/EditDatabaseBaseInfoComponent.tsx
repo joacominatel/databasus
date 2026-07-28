@@ -8,7 +8,9 @@ import {
   getDatabaseLogoFromType,
   initializeDatabaseTypeData,
   isPostgresType,
+  isSshTunnelFilled,
 } from '../../../../entity/databases';
+import { EditSshTunnelComponent } from './EditSshTunnelComponent';
 
 interface Props {
   database: Database;
@@ -84,7 +86,10 @@ export const EditDatabaseBaseInfoComponent = ({
 
   if (!editingDatabase) return null;
 
-  const isAllFieldsFilled = !!editingDatabase.name?.trim();
+  const isAllFieldsFilled =
+    !!editingDatabase.name?.trim() &&
+    (!editingDatabase.sshTunnel ||
+      isSshTunnelFilled(editingDatabase.sshTunnel, !editingDatabase.id));
 
   return (
     <div>
@@ -130,6 +135,12 @@ export const EditDatabaseBaseInfoComponent = ({
           })}
         </div>
       )}
+
+      <EditSshTunnelComponent
+        databaseType={editingDatabase.type}
+        sshTunnel={editingDatabase.sshTunnel}
+        onSshTunnelChange={(sshTunnel) => updateDatabase({ sshTunnel })}
+      />
 
       <div className="mt-5 flex">
         {isShowCancelButton && (
