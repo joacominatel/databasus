@@ -96,47 +96,15 @@ func (p *PostgresqlLogicalDatabase) Validate() error {
 		return errors.New("cpu count must be greater than 0")
 	}
 
-	if err := p.validateSslConfig(); err != nil {
-		return err
+	return p.validateSslConfig()
+}
+
+func (p *PostgresqlLogicalDatabase) GetDatabaseName() string {
+	if p.Database == nil {
+		return ""
 	}
 
-	// Prevent Databasus from backing up itself
-	// Databasus runs an internal PostgreSQL instance that should not be backed up through the UI
-	// because it would expose internal metadata to non-system administrators.
-	// To properly backup Databasus, see: https://databasus.com/faq#backup-databasus
-	if p.Database != nil && *p.Database != "" {
-		localhostHosts := []string{
-			"localhost",
-			"127.0.0.1",
-			"172.17.0.1",
-			"host.docker.internal",
-			"::1",     // IPv6 loopback (equivalent to 127.0.0.1)
-			"::",      // IPv6 all interfaces (equivalent to 0.0.0.0)
-			"0.0.0.0", // IPv4 all interfaces
-		}
-
-		isLocalhost := false
-
-		for _, host := range localhostHosts {
-			if strings.EqualFold(p.Host, host) {
-				isLocalhost = true
-				break
-			}
-		}
-
-		// Also check if the host is in the entire 127.0.0.0/8 loopback range
-		if strings.HasPrefix(p.Host, "127.") {
-			isLocalhost = true
-		}
-
-		if isLocalhost && strings.EqualFold(*p.Database, "databasus") {
-			return errors.New(
-				"backing up Databasus internal database is not allowed. To backup Databasus itself, see https://databasus.com/faq#backup-databasus",
-			)
-		}
-	}
-
-	return nil
+	return *p.Database
 }
 
 func (p *PostgresqlLogicalDatabase) TestConnection(
