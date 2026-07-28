@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 
 	"databasus-backend/internal/config"
 	"databasus-backend/internal/features/audit_logs"
@@ -22,6 +23,8 @@ import (
 	postgresql_logical "databasus-backend/internal/features/databases/databases/postgresql/logical"
 	postgresql_physical "databasus-backend/internal/features/databases/databases/postgresql/physical"
 	postgresql_shared "databasus-backend/internal/features/databases/databases/postgresql/shared"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
+	ssh_tunnel_testing "databasus-backend/internal/features/databases/ssh_tunnel/testing"
 	"databasus-backend/internal/features/notifiers"
 	"databasus-backend/internal/features/storages"
 	users_enums "databasus-backend/internal/features/users/enums"
@@ -1465,4 +1468,310 @@ func Test_UpdateDatabase_FailsForSwitchToPhysicalIncrementalWhenSummarizeWalOff(
 			)
 		})
 	}
+}
+
+func Test_CreateDatabase_WithSshTunnel_DatabaseCreated(t *testing.T) {
+	testbed := startSshTunnelTestbed(t, nil)
+
+	createdDatabase := testbed.CreateDatabase(
+		t,
+		testbed.NewDatabaseRequest("Tunneled Database", testbed.NewPasswordTunnel()),
+	)
+
+	require.NotNil(t, createdDatabase.SshTunnel)
+	assert.Equal(t, testbed.bastion.GetHost(), createdDatabase.SshTunnel.Host)
+	assert.Equal(t, testbed.bastion.GetPort(), createdDatabase.SshTunnel.Port)
+
+	persistedDatabase := testbed.GetDatabase(t, createdDatabase.ID)
+
+	require.NotNil(t, persistedDatabase.SshTunnel)
+	assert.Equal(t, ssh_tunnel_testing.BastionUsername, persistedDatabase.SshTunnel.Username)
+	assert.Equal(t, testbed.bastion.GetHostKeyFingerprint(), persistedDatabase.SshTunnel.HostKeyFingerprint)
+	assert.Positive(
+		t,
+		testbed.bastion.GetBytesRelayedFromRemote(),
+		"the connection probes must reach postgresql through the bastion",
+	)
+}
+
+func Test_CreateDatabase_WithSshTunnelWrongCredentials_ReturnsError(t *testing.T) {
+	testbed := startSshTunnelTestbed(t, nil)
+
+	sshTunnel := testbed.NewPasswordTunnel()
+	sshTunnel.Password = "not-the-bastion-password"
+
+	rejectionMessage := testbed.GetCreateDatabaseRejection(
+		t,
+		testbed.NewDatabaseRequest("Wrong Bastion Password Database", sshTunnel),
+	)
+
+	assert.Contains(t, rejectionMessage, "failed to establish SSH tunnel connection")
+	assert.NotContains(t, rejectionMessage, "not-the-bastion-password")
+}
+
+func Test_CreateDatabase_WithSshTunnelHostKeyMismatch_ReturnsError(t *testing.T) {
+	testbed := startSshTunnelTestbed(t, nil)
+
+	sshTunnel := testbed.NewPasswordTunnel()
+	sshTunnel.HostKeyFingerprint = ssh_tunnel_testing.GenerateHostKeyFingerprint(t)
+
+	rejectionMessage := testbed.GetCreateDatabaseRejection(
+		t,
+		testbed.NewDatabaseRequest("Host Key Mismatch Database", sshTunnel),
+	)
+
+	assert.Contains(t, rejectionMessage, ssh_tunnel.ErrHostKeyMismatch.Error())
+	assert.NotContains(t, rejectionMessage, ssh_tunnel_testing.BastionPassword)
+}
+
+func Test_CreateDatabase_WithSshTunnelOnPostgresPhysical_ReturnsError(t *testing.T) {
+	testbed := startSshTunnelTestbed(t, nil)
+
+	primaryHost, primaryPort := physicalPrimaryEndpoint("17")
+	request := Database{
+		Name:        "Physical Tunneled Database",
+		WorkspaceID: &testbed.workspaceID,
+		Type:        DatabaseTypePostgresPhysical,
+		PostgresqlPhysical: GetTestPhysicalPostgresConfigWithType(
+			primaryHost,
+			primaryPort,
+			"17",
+			postgresql_physical.BackupTypeFullOnly,
+		),
+		SshTunnel: testbed.NewPasswordTunnel(),
+	}
+
+	rejectionMessage := testbed.GetCreateDatabaseRejection(t, request)
+
+	assert.Contains(t, rejectionMessage, "ssh tunnel is not supported for physical postgresql databases yet")
+}
+
+func Test_CreateDatabase_WithSshTunnelToInternalDatabasus_ReturnsError(t *testing.T) {
+	testbed := startSshTunnelTestbed(t, nil)
+
+	internalDatabaseName := "databasus"
+	postgresConfig := getTestPostgresConfig()
+	postgresConfig.Host = testbed.bastion.GetHost()
+	postgresConfig.Database = &internalDatabaseName
+
+	request := testbed.NewDatabaseRequest("Internal Databasus Database", testbed.NewPasswordTunnel())
+	request.PostgresqlLogical = postgresConfig
+
+	rejectionMessage := testbed.GetCreateDatabaseRejection(t, request)
+
+	assert.Contains(t, rejectionMessage, "backing up Databasus internal database is not allowed")
+}
+
+func Test_GetDatabase_WithSshTunnel_HidesPrivateKey(t *testing.T) {
+	privateKeyPem, authorizedKey := ssh_tunnel_testing.GenerateProtectedClientKey(t)
+	testbed := startSshTunnelTestbed(t, authorizedKey)
+
+	createdDatabase := testbed.CreateDatabase(
+		t,
+		testbed.NewDatabaseRequest("Key Authenticated Database", testbed.NewPrivateKeyTunnel(privateKeyPem)),
+	)
+
+	var persistedDatabase Database
+	getResponse := test_utils.MakeGetRequestAndUnmarshal(
+		t,
+		testbed.router,
+		"/api/v1/databases/"+createdDatabase.ID.String(),
+		"Bearer "+testbed.ownerToken,
+		http.StatusOK,
+		&persistedDatabase,
+	)
+
+	require.NotNil(t, persistedDatabase.SshTunnel)
+	assert.Empty(t, persistedDatabase.SshTunnel.PrivateKey)
+	assert.Empty(t, persistedDatabase.SshTunnel.PrivateKeyPassphrase)
+	assert.Empty(t, persistedDatabase.SshTunnel.Password)
+	assert.Equal(t, ssh_tunnel_testing.BastionUsername, persistedDatabase.SshTunnel.Username)
+
+	assert.NotContains(t, string(getResponse.Body), "OPENSSH PRIVATE KEY")
+	assert.NotContains(t, string(getResponse.Body), ssh_tunnel_testing.PrivateKeyPassphrase)
+}
+
+func Test_UpdateDatabase_WithEmptySshTunnelPrivateKey_KeepsStoredKey(t *testing.T) {
+	privateKeyPem, authorizedKey := ssh_tunnel_testing.GenerateProtectedClientKey(t)
+	testbed := startSshTunnelTestbed(t, authorizedKey)
+
+	createdDatabase := testbed.CreateDatabase(
+		t,
+		testbed.NewDatabaseRequest("Key Authenticated Database", testbed.NewPrivateKeyTunnel(privateKeyPem)),
+	)
+
+	databaseWithoutSecrets := testbed.GetDatabase(t, createdDatabase.ID)
+	require.Empty(t, databaseWithoutSecrets.SshTunnel.PrivateKey)
+
+	databaseWithoutSecrets.Name = "Renamed Key Authenticated Database"
+
+	updatedDatabase := testbed.UpdateDatabase(t, databaseWithoutSecrets)
+	assert.Equal(t, "Renamed Key Authenticated Database", updatedDatabase.Name)
+
+	storedDatabase, err := (&DatabaseRepository{}).FindByID(createdDatabase.ID)
+	require.NoError(t, err)
+	require.NotNil(t, storedDatabase.SshTunnel)
+
+	assert.True(
+		t,
+		strings.HasPrefix(storedDatabase.SshTunnel.PrivateKey, "enc:"),
+		"the stored private key must stay encrypted",
+	)
+
+	storedPrivateKey, err := encryption.GetFieldEncryptor().Decrypt(storedDatabase.SshTunnel.PrivateKey)
+	require.NoError(t, err)
+	assert.Equal(t, privateKeyPem, storedPrivateKey)
+
+	storedPassphrase, err := encryption.GetFieldEncryptor().Decrypt(storedDatabase.SshTunnel.PrivateKeyPassphrase)
+	require.NoError(t, err)
+	assert.Equal(t, ssh_tunnel_testing.PrivateKeyPassphrase, storedPassphrase)
+}
+
+func Test_UpdateDatabase_RemovingSshTunnel_TunnelDeleted(t *testing.T) {
+	testbed := startSshTunnelTestbed(t, nil)
+
+	createdDatabase := testbed.CreateDatabase(
+		t,
+		testbed.NewDatabaseRequest("Tunneled Database", testbed.NewPasswordTunnel()),
+	)
+
+	databaseWithoutTunnel := testbed.GetDatabase(t, createdDatabase.ID)
+	require.NotNil(t, databaseWithoutTunnel.SshTunnel)
+
+	databaseWithoutTunnel.SshTunnel = nil
+	testbed.UpdateDatabase(t, databaseWithoutTunnel)
+
+	reloadedDatabase := testbed.GetDatabase(t, createdDatabase.ID)
+	assert.Nil(t, reloadedDatabase.SshTunnel)
+
+	storedDatabase, err := (&DatabaseRepository{}).FindByID(createdDatabase.ID)
+	require.NoError(t, err)
+	assert.Nil(t, storedDatabase.SshTunnel, "the tunnel row must be deleted, not orphaned")
+}
+
+type sshTunnelTestbed struct {
+	router      *gin.Engine
+	ownerToken  string
+	workspaceID uuid.UUID
+	bastion     *ssh_tunnel_testing.Bastion
+}
+
+func startSshTunnelTestbed(t *testing.T, authorizedKey ssh.PublicKey) *sshTunnelTestbed {
+	t.Helper()
+
+	router := createTestRouter()
+	owner := users_testing.CreateTestUser(users_enums.UserRoleMember)
+	workspace := workspaces_testing.CreateTestWorkspace("SSH Tunnel Workspace", owner, router)
+	t.Cleanup(func() { workspaces_testing.RemoveTestWorkspace(workspace, router) })
+
+	return &sshTunnelTestbed{
+		router:      router,
+		ownerToken:  owner.Token,
+		workspaceID: workspace.ID,
+		bastion:     ssh_tunnel_testing.StartBastion(t, authorizedKey),
+	}
+}
+
+func (b *sshTunnelTestbed) NewPasswordTunnel() *ssh_tunnel.Tunnel {
+	return &ssh_tunnel.Tunnel{
+		Host:               b.bastion.GetHost(),
+		Port:               b.bastion.GetPort(),
+		Username:           ssh_tunnel_testing.BastionUsername,
+		Password:           ssh_tunnel_testing.BastionPassword,
+		HostKeyFingerprint: b.bastion.GetHostKeyFingerprint(),
+	}
+}
+
+func (b *sshTunnelTestbed) NewPrivateKeyTunnel(privateKeyPem string) *ssh_tunnel.Tunnel {
+	sshTunnel := b.NewPasswordTunnel()
+	sshTunnel.Password = ""
+	sshTunnel.PrivateKey = privateKeyPem
+	sshTunnel.PrivateKeyPassphrase = ssh_tunnel_testing.PrivateKeyPassphrase
+
+	return sshTunnel
+}
+
+func (b *sshTunnelTestbed) NewDatabaseRequest(name string, sshTunnel *ssh_tunnel.Tunnel) Database {
+	return Database{
+		Name:              name,
+		WorkspaceID:       &b.workspaceID,
+		Type:              DatabaseTypePostgresLogical,
+		PostgresqlLogical: getTestPostgresConfig(),
+		SshTunnel:         sshTunnel,
+	}
+}
+
+func (b *sshTunnelTestbed) CreateDatabase(t *testing.T, request Database) Database {
+	t.Helper()
+
+	var createdDatabase Database
+	test_utils.MakePostRequestAndUnmarshal(
+		t,
+		b.router,
+		"/api/v1/databases/create",
+		"Bearer "+b.ownerToken,
+		request,
+		http.StatusCreated,
+		&createdDatabase,
+	)
+
+	t.Cleanup(func() {
+		test_utils.MakeDeleteRequest(
+			t,
+			b.router,
+			"/api/v1/databases/"+createdDatabase.ID.String(),
+			"Bearer "+b.ownerToken,
+			http.StatusNoContent,
+		)
+	})
+
+	return createdDatabase
+}
+
+func (b *sshTunnelTestbed) GetCreateDatabaseRejection(t *testing.T, request Database) string {
+	t.Helper()
+
+	rejection := test_utils.MakePostRequest(
+		t,
+		b.router,
+		"/api/v1/databases/create",
+		"Bearer "+b.ownerToken,
+		request,
+		http.StatusBadRequest,
+	)
+
+	return string(rejection.Body)
+}
+
+func (b *sshTunnelTestbed) GetDatabase(t *testing.T, databaseID uuid.UUID) Database {
+	t.Helper()
+
+	var persistedDatabase Database
+	test_utils.MakeGetRequestAndUnmarshal(
+		t,
+		b.router,
+		"/api/v1/databases/"+databaseID.String(),
+		"Bearer "+b.ownerToken,
+		http.StatusOK,
+		&persistedDatabase,
+	)
+
+	return persistedDatabase
+}
+
+func (b *sshTunnelTestbed) UpdateDatabase(t *testing.T, database Database) Database {
+	t.Helper()
+
+	var updatedDatabase Database
+	test_utils.MakePostRequestAndUnmarshal(
+		t,
+		b.router,
+		"/api/v1/databases/update",
+		"Bearer "+b.ownerToken,
+		database,
+		http.StatusOK,
+		&updatedDatabase,
+	)
+
+	return updatedDatabase
 }
