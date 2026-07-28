@@ -24,6 +24,7 @@ import (
 	"databasus-backend/internal/features/databases"
 	pgtypes "databasus-backend/internal/features/databases/databases/postgresql/logical"
 	postgresql_shared "databasus-backend/internal/features/databases/databases/postgresql/shared"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
 	encryption_secrets "databasus-backend/internal/features/encryption/secrets"
 	restores_core "databasus-backend/internal/features/restores/core"
 	"databasus-backend/internal/features/storages"
@@ -59,10 +60,21 @@ func (uc *RestorePostgresqlBackupUsecase) Execute(
 		backup.ID,
 	)
 
-	pg := restoringToDB.PostgresqlLogical
-	if pg == nil {
+	if restoringToDB.PostgresqlLogical == nil {
 		return fmt.Errorf("postgresql configuration is required for restore")
 	}
+
+	reachableDatabase, openedTunnel, err := restoringToDB.OpenReachableDatabase(
+		parentCtx,
+		uc.logger,
+		util_encryption.GetFieldEncryptor(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to open ssh tunnel to the target postgresql database: %w", err)
+	}
+	defer uc.closeSshTunnel(openedTunnel)
+
+	pg := reachableDatabase.PostgresqlLogical
 
 	if pg.Database == nil || *pg.Database == "" {
 		return fmt.Errorf("target database name is required for pg_restore")
@@ -80,6 +92,16 @@ func (uc *RestorePostgresqlBackupUsecase) Execute(
 		pg,
 		options,
 	)
+}
+
+func (uc *RestorePostgresqlBackupUsecase) closeSshTunnel(openedTunnel *ssh_tunnel.OpenedTunnel) {
+	if openedTunnel == nil {
+		return
+	}
+
+	if err := openedTunnel.Close(); err != nil {
+		uc.logger.Error("failed to close ssh tunnel", "error", err)
+	}
 }
 
 // restoreCustomType restores a backup in custom type (-Fc)
