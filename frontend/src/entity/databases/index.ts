@@ -6,6 +6,8 @@ export { getDatabaseTypeLabel } from './model/getDatabaseTypeLabel';
 export { isPostgresType } from './model/isPostgresType';
 export { initializeDatabaseTypeData } from './model/initializeDatabaseTypeData';
 export { Period } from './model/Period';
+export { type SshTunnel } from './model/SshTunnel';
+export { isSshTunnelFilled } from './model/isSshTunnelFilled';
 export { PostgresSslMode } from './model/postgresql/PostgresSslMode';
 export { type PostgresqlLogicalDatabase } from './model/postgresql/PostgresqlLogicalDatabase';
 export { type PostgresqlPhysicalDatabase } from './model/postgresql/physical/PostgresqlPhysicalDatabase';
