@@ -13,6 +13,7 @@ import (
 	"databasus-backend/internal/features/databases/databases/mysql"
 	postgresql_logical "databasus-backend/internal/features/databases/databases/postgresql/logical"
 	postgresql_physical "databasus-backend/internal/features/databases/databases/postgresql/physical"
+	"databasus-backend/internal/features/databases/ssh_tunnel"
 	"databasus-backend/internal/features/notifiers"
 	"databasus-backend/internal/util/encryption"
 )
@@ -32,6 +33,8 @@ type Database struct {
 	Mariadb            *mariadb.MariadbDatabase                        `json:"mariadb,omitzero"            gorm:"foreignKey:DatabaseID"`
 	Mongodb            *mongodb.MongodbDatabase                        `json:"mongodb,omitzero"            gorm:"foreignKey:DatabaseID"`
 
+	SshTunnel *ssh_tunnel.Tunnel `json:"sshTunnel,omitzero" gorm:"foreignKey:DatabaseID"`
+
 	Notifiers []notifiers.Notifier `json:"notifiers" gorm:"many2many:database_notifiers;"`
 
 	// these fields are not reliable, but
@@ -47,12 +50,37 @@ func (d *Database) Validate() error {
 		return errors.New("name is required")
 	}
 
+	sshTunnelHost := ""
+
+	if d.SshTunnel != nil {
+		if d.Type == DatabaseTypePostgresPhysical {
+			return errors.New("ssh tunnel is not supported for physical postgresql databases yet")
+		}
+
+		if err := d.SshTunnel.Validate(); err != nil {
+			return err
+		}
+
+		sshTunnelHost = d.SshTunnel.Host
+	}
+
 	switch d.Type {
 	case DatabaseTypePostgresLogical:
 		if d.PostgresqlLogical == nil {
 			return errors.New("postgresql database is required")
 		}
-		return d.PostgresqlLogical.Validate()
+
+		if err := d.PostgresqlLogical.Validate(); err != nil {
+			return err
+		}
+
+		return postgresql_logical.ValidateIsNotDatabasusInternalDatabase(
+			postgresql_logical.ConnectionDestination{
+				Host:          d.PostgresqlLogical.Host,
+				SshTunnelHost: sshTunnelHost,
+				DatabaseName:  d.PostgresqlLogical.GetDatabaseName(),
+			},
+		)
 	case DatabaseTypePostgresPhysical:
 		if d.PostgresqlPhysical == nil {
 			return errors.New("postgresql physical database is required")
@@ -103,41 +131,103 @@ func (d *Database) ValidateUpdate(old, new Database) error {
 	return nil
 }
 
+type engineEndpoint struct {
+	Host string
+	Port int
+}
+
+// The returned database is a copy whenever a tunnel is opened: concurrent backups share one
+// Database, so rewriting the engine endpoint in place would be a data race.
+func (d *Database) OpenReachableDatabase(
+	ctx context.Context,
+	logger *slog.Logger,
+	encryptor encryption.FieldEncryptor,
+) (*Database, *ssh_tunnel.OpenedTunnel, error) {
+	if d.SshTunnel == nil {
+		return d, nil, nil
+	}
+
+	destination, err := d.getEngineEndpoint()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	openedTunnel, err := d.SshTunnel.Open(ctx, ssh_tunnel.ForwardSpec{
+		Logger:     logger.With("database_id", d.ID),
+		Encryptor:  encryptor,
+		RemoteHost: destination.Host,
+		RemotePort: destination.Port,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	localHost, localPort := openedTunnel.GetLocalEndpoint()
+
+	reachableDatabase := d.cloneWithEngineEndpoint(engineEndpoint{
+		Host: localHost,
+		Port: localPort,
+	})
+
+	return reachableDatabase, openedTunnel, nil
+}
+
+func closeTunnel(logger *slog.Logger, openedTunnel *ssh_tunnel.OpenedTunnel) {
+	if openedTunnel == nil {
+		return
+	}
+
+	if err := openedTunnel.Close(); err != nil {
+		logger.Error("failed to close ssh tunnel", "error", err)
+	}
+}
+
 func (d *Database) TestConnection(
 	logger *slog.Logger,
 	encryptor encryption.FieldEncryptor,
 ) error {
-	switch d.Type {
+	reachableDatabase, openedTunnel, err := d.OpenReachableDatabase(
+		context.Background(),
+		logger,
+		encryptor,
+	)
+	if err != nil {
+		return err
+	}
+	defer closeTunnel(logger, openedTunnel)
+	defer d.copyDetectedEngineData(reachableDatabase)
+
+	switch reachableDatabase.Type {
 	case DatabaseTypePostgresLogical:
-		if d.PostgresqlLogical == nil {
+		if reachableDatabase.PostgresqlLogical == nil {
 			return errors.New("postgresql logical config is not set")
 		}
 
-		return d.PostgresqlLogical.TestConnection(logger, encryptor)
+		return reachableDatabase.PostgresqlLogical.TestConnection(logger, encryptor)
 	case DatabaseTypePostgresPhysical:
-		if d.PostgresqlPhysical == nil {
+		if reachableDatabase.PostgresqlPhysical == nil {
 			return errors.New("postgresql physical config is not set")
 		}
 
-		return d.PostgresqlPhysical.TestReplicationConnection(logger, encryptor)
+		return reachableDatabase.PostgresqlPhysical.TestReplicationConnection(logger, encryptor)
 	case DatabaseTypeMysql:
-		if d.Mysql == nil {
+		if reachableDatabase.Mysql == nil {
 			return errors.New("mysql config is not set")
 		}
 
-		return d.Mysql.TestConnection(logger, encryptor)
+		return reachableDatabase.Mysql.TestConnection(logger, encryptor)
 	case DatabaseTypeMariadb:
-		if d.Mariadb == nil {
+		if reachableDatabase.Mariadb == nil {
 			return errors.New("mariadb config is not set")
 		}
 
-		return d.Mariadb.TestConnection(logger, encryptor)
+		return reachableDatabase.Mariadb.TestConnection(logger, encryptor)
 	case DatabaseTypeMongodb:
-		if d.Mongodb == nil {
+		if reachableDatabase.Mongodb == nil {
 			return errors.New("mongodb config is not set")
 		}
 
-		return d.Mongodb.TestConnection(logger, encryptor)
+		return reachableDatabase.Mongodb.TestConnection(logger, encryptor)
 	default:
 		return errors.New("connection test not supported for database type: " + string(d.Type))
 	}
@@ -148,31 +238,37 @@ func (d *Database) GetRawDbSizeMb(
 	logger *slog.Logger,
 	encryptor encryption.FieldEncryptor,
 ) (float64, error) {
-	switch d.Type {
+	reachableDatabase, openedTunnel, err := d.OpenReachableDatabase(ctx, logger, encryptor)
+	if err != nil {
+		return 0, err
+	}
+	defer closeTunnel(logger, openedTunnel)
+
+	switch reachableDatabase.Type {
 	case DatabaseTypePostgresLogical:
-		if d.PostgresqlLogical == nil {
+		if reachableDatabase.PostgresqlLogical == nil {
 			return 0, errors.New("postgresql logical config is not set")
 		}
 
-		return d.PostgresqlLogical.GetRawDbSizeMb(ctx, logger, encryptor)
+		return reachableDatabase.PostgresqlLogical.GetRawDbSizeMb(ctx, logger, encryptor)
 	case DatabaseTypeMysql:
-		if d.Mysql == nil {
+		if reachableDatabase.Mysql == nil {
 			return 0, errors.New("mysql config is not set")
 		}
 
-		return d.Mysql.GetRawDbSizeMb(ctx, logger, encryptor)
+		return reachableDatabase.Mysql.GetRawDbSizeMb(ctx, logger, encryptor)
 	case DatabaseTypeMariadb:
-		if d.Mariadb == nil {
+		if reachableDatabase.Mariadb == nil {
 			return 0, errors.New("mariadb config is not set")
 		}
 
-		return d.Mariadb.GetRawDbSizeMb(ctx, logger, encryptor)
+		return reachableDatabase.Mariadb.GetRawDbSizeMb(ctx, logger, encryptor)
 	case DatabaseTypeMongodb:
-		if d.Mongodb == nil {
+		if reachableDatabase.Mongodb == nil {
 			return 0, errors.New("mongodb config is not set")
 		}
 
-		return d.Mongodb.GetRawDbSizeMb(ctx, logger, encryptor)
+		return reachableDatabase.Mongodb.GetRawDbSizeMb(ctx, logger, encryptor)
 	default:
 		return 0, errors.New("logical backup not supported for database type: " + string(d.Type))
 	}
@@ -183,17 +279,23 @@ func (d *Database) IsUserReadOnly(
 	logger *slog.Logger,
 	encryptor encryption.FieldEncryptor,
 ) (bool, []string, error) {
-	switch d.Type {
+	reachableDatabase, openedTunnel, err := d.OpenReachableDatabase(ctx, logger, encryptor)
+	if err != nil {
+		return false, nil, err
+	}
+	defer closeTunnel(logger, openedTunnel)
+
+	switch reachableDatabase.Type {
 	case DatabaseTypePostgresLogical:
-		return d.PostgresqlLogical.IsUserReadOnly(ctx, logger, encryptor)
+		return reachableDatabase.PostgresqlLogical.IsUserReadOnly(ctx, logger, encryptor)
 	case DatabaseTypePostgresPhysical:
-		return d.PostgresqlPhysical.IsUserReplicationOnly(ctx, logger, encryptor)
+		return reachableDatabase.PostgresqlPhysical.IsUserReplicationOnly(ctx, logger, encryptor)
 	case DatabaseTypeMysql:
-		return d.Mysql.IsUserReadOnly(ctx, logger, encryptor)
+		return reachableDatabase.Mysql.IsUserReadOnly(ctx, logger, encryptor)
 	case DatabaseTypeMariadb:
-		return d.Mariadb.IsUserReadOnly(ctx, logger, encryptor)
+		return reachableDatabase.Mariadb.IsUserReadOnly(ctx, logger, encryptor)
 	case DatabaseTypeMongodb:
-		return d.Mongodb.IsUserReadOnly(ctx, logger, encryptor)
+		return reachableDatabase.Mongodb.IsUserReadOnly(ctx, logger, encryptor)
 	default:
 		return false, nil, errors.New("read-only check not supported for this database type")
 	}
@@ -215,9 +317,20 @@ func (d *Database) HideSensitiveData() {
 	if d.Mongodb != nil {
 		d.Mongodb.HideSensitiveData()
 	}
+	if d.SshTunnel != nil {
+		d.SshTunnel.HideSensitiveData()
+	}
 }
 
+// The tunnel coexists with any engine, so it is encrypted on top of the engine and not instead
+// of it.
 func (d *Database) EncryptSensitiveFields(encryptor encryption.FieldEncryptor) error {
+	if d.SshTunnel != nil {
+		if err := d.SshTunnel.EncryptSensitiveFields(encryptor); err != nil {
+			return err
+		}
+	}
+
 	if d.PostgresqlLogical != nil {
 		return d.PostgresqlLogical.EncryptSensitiveFields(encryptor)
 	}
@@ -240,20 +353,31 @@ func (d *Database) PopulateDbData(
 	logger *slog.Logger,
 	encryptor encryption.FieldEncryptor,
 ) error {
-	if d.PostgresqlLogical != nil {
-		return d.PostgresqlLogical.PopulateDbData(logger, encryptor)
+	reachableDatabase, openedTunnel, err := d.OpenReachableDatabase(
+		context.Background(),
+		logger,
+		encryptor,
+	)
+	if err != nil {
+		return err
 	}
-	if d.PostgresqlPhysical != nil {
-		return d.PostgresqlPhysical.PopulateDbData(logger, encryptor)
+	defer closeTunnel(logger, openedTunnel)
+	defer d.copyDetectedEngineData(reachableDatabase)
+
+	if reachableDatabase.PostgresqlLogical != nil {
+		return reachableDatabase.PostgresqlLogical.PopulateDbData(logger, encryptor)
 	}
-	if d.Mysql != nil {
-		return d.Mysql.PopulateDbData(logger, encryptor)
+	if reachableDatabase.PostgresqlPhysical != nil {
+		return reachableDatabase.PostgresqlPhysical.PopulateDbData(logger, encryptor)
 	}
-	if d.Mariadb != nil {
-		return d.Mariadb.PopulateDbData(logger, encryptor)
+	if reachableDatabase.Mysql != nil {
+		return reachableDatabase.Mysql.PopulateDbData(logger, encryptor)
 	}
-	if d.Mongodb != nil {
-		return d.Mongodb.PopulateDbData(logger, encryptor)
+	if reachableDatabase.Mariadb != nil {
+		return reachableDatabase.Mariadb.PopulateDbData(logger, encryptor)
+	}
+	if reachableDatabase.Mongodb != nil {
+		return reachableDatabase.Mongodb.PopulateDbData(logger, encryptor)
 	}
 	return nil
 }
@@ -284,5 +408,120 @@ func (d *Database) Update(incoming *Database) {
 		if d.Mongodb != nil && incoming.Mongodb != nil {
 			d.Mongodb.Update(incoming.Mongodb)
 		}
+	}
+
+	d.updateSshTunnel(incoming.SshTunnel)
+}
+
+func (d *Database) updateSshTunnel(incoming *ssh_tunnel.Tunnel) {
+	if incoming == nil {
+		d.SshTunnel = nil
+
+		return
+	}
+
+	if d.SshTunnel == nil {
+		incoming.ID = uuid.Nil
+		incoming.DatabaseID = d.ID
+		d.SshTunnel = incoming
+
+		return
+	}
+
+	d.SshTunnel.Update(incoming)
+}
+
+// The endpoint stored on the engine model is the one seen from the bastion, so it is what the
+// forward has to reach.
+func (d *Database) getEngineEndpoint() (engineEndpoint, error) {
+	switch d.Type {
+	case DatabaseTypePostgresLogical:
+		if d.PostgresqlLogical == nil {
+			return engineEndpoint{}, errors.New("postgresql logical config is not set")
+		}
+
+		return engineEndpoint{Host: d.PostgresqlLogical.Host, Port: d.PostgresqlLogical.Port}, nil
+	case DatabaseTypeMysql:
+		if d.Mysql == nil {
+			return engineEndpoint{}, errors.New("mysql config is not set")
+		}
+
+		return engineEndpoint{Host: d.Mysql.Host, Port: d.Mysql.Port}, nil
+	case DatabaseTypeMariadb:
+		if d.Mariadb == nil {
+			return engineEndpoint{}, errors.New("mariadb config is not set")
+		}
+
+		return engineEndpoint{Host: d.Mariadb.Host, Port: d.Mariadb.Port}, nil
+	case DatabaseTypeMongodb:
+		if d.Mongodb == nil {
+			return engineEndpoint{}, errors.New("mongodb config is not set")
+		}
+
+		if d.Mongodb.Port == nil || *d.Mongodb.Port == 0 {
+			return engineEndpoint{}, errors.New(
+				"ssh tunnel requires an explicit mongodb port, srv connections are not supported",
+			)
+		}
+
+		return engineEndpoint{Host: d.Mongodb.Host, Port: *d.Mongodb.Port}, nil
+	default:
+		return engineEndpoint{}, errors.New(
+			"ssh tunnel is not supported for database type: " + string(d.Type),
+		)
+	}
+}
+
+func (d *Database) cloneWithEngineEndpoint(endpoint engineEndpoint) *Database {
+	reachableDatabase := *d
+
+	switch d.Type {
+	case DatabaseTypePostgresLogical:
+		reachableEngine := *d.PostgresqlLogical
+		reachableEngine.Host = endpoint.Host
+		reachableEngine.Port = endpoint.Port
+
+		reachableDatabase.PostgresqlLogical = &reachableEngine
+	case DatabaseTypeMysql:
+		reachableEngine := *d.Mysql
+		reachableEngine.Host = endpoint.Host
+		reachableEngine.Port = endpoint.Port
+
+		reachableDatabase.Mysql = &reachableEngine
+	case DatabaseTypeMariadb:
+		reachableEngine := *d.Mariadb
+		reachableEngine.Host = endpoint.Host
+		reachableEngine.Port = endpoint.Port
+
+		reachableDatabase.Mariadb = &reachableEngine
+	case DatabaseTypeMongodb:
+		reachableEngine := *d.Mongodb
+		reachableEngine.Host = endpoint.Host
+		reachableEngine.Port = &endpoint.Port
+
+		reachableDatabase.Mongodb = &reachableEngine
+	}
+
+	return &reachableDatabase
+}
+
+// Connection probes write what they detect (version, privileges) onto the engine model they ran
+// against, which is the tunnel copy — the stored model would keep an empty version otherwise.
+func (d *Database) copyDetectedEngineData(probedDatabase *Database) {
+	if probedDatabase == d {
+		return
+	}
+
+	switch d.Type {
+	case DatabaseTypePostgresLogical:
+		d.PostgresqlLogical.Version = probedDatabase.PostgresqlLogical.Version
+	case DatabaseTypeMysql:
+		d.Mysql.Version = probedDatabase.Mysql.Version
+		d.Mysql.Privileges = probedDatabase.Mysql.Privileges
+	case DatabaseTypeMariadb:
+		d.Mariadb.Version = probedDatabase.Mariadb.Version
+		d.Mariadb.Privileges = probedDatabase.Mariadb.Privileges
+	case DatabaseTypeMongodb:
+		d.Mongodb.Version = probedDatabase.Mongodb.Version
 	}
 }
